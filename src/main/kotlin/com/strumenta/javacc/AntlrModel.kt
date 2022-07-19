@@ -51,6 +51,11 @@ class LexerDefinitions(val name: String) {
     }
 
     fun addRuleDefinition(mode: String, ruleDefinition: RuleDefinition) {
+        if ((ruleDefinition.name.length == 1) and (ruleDefinition.body.length == 3)) {
+            // We create fragments for all the single letter tokens later.
+            return;
+        }
+
         if (!rulesByMode.containsKey(mode)) {
             rulesByMode[mode] = LinkedList()
         }
@@ -61,8 +66,9 @@ class LexerDefinitions(val name: String) {
             }
             ruleDefinitionCorrected = ruleDefinition.copy(name = generateName(ruleDefinition.body, rulesByMode[mode]!!.map { it.name }.toSet()))
         }
+
         if (ruleDefinitionCorrected.name.startsWith("_")) {
-            ruleDefinitionCorrected = ruleDefinitionCorrected.copy(name = "US_${ruleDefinitionCorrected.name}")
+            ruleDefinitionCorrected = ruleDefinitionCorrected.copy(name = "UNDERSCORE${ruleDefinitionCorrected.name}")
         }
         if (ruleDefinitionCorrected.name == ruleDefinitionCorrected.body) {
             return
@@ -70,6 +76,38 @@ class LexerDefinitions(val name: String) {
         if (ruleDefinitionCorrected.body.contains("~[]")) {
             ruleDefinitionCorrected = ruleDefinitionCorrected.copy(body = ruleDefinitionCorrected.body.replace("~[]", "."))
         }
+        if (ruleDefinitionCorrected.body.contains("_NUM_CHAR")) {
+            ruleDefinitionCorrected = ruleDefinitionCorrected.copy(body = ruleDefinitionCorrected.body.replace("_NUM_CHAR", "UNDERSCORE_NUM_CHAR"))
+        }
+        if (ruleDefinitionCorrected.body.contains("_ESCAPED_CHAR")) {
+            ruleDefinitionCorrected = ruleDefinitionCorrected.copy(body = ruleDefinitionCorrected.body.replace("_ESCAPED_CHAR", "UNDERSCORE_ESCAPED_CHAR"))
+        }
+        if (ruleDefinitionCorrected.body.contains("_TERM_START_CHAR")) {
+            ruleDefinitionCorrected = ruleDefinitionCorrected.copy(body = ruleDefinitionCorrected.body.replace("_TERM_START_CHAR", "UNDERSCORE_TERM_START_CHAR"))
+        }
+        if (ruleDefinitionCorrected.body.contains("_TERM_CHAR")) {
+            ruleDefinitionCorrected = ruleDefinitionCorrected.copy(body = ruleDefinitionCorrected.body.replace("_TERM_CHAR", "UNDERSCORE_TERM_CHAR"))
+        }
+        if (ruleDefinitionCorrected.body.contains("_WHITESPACE")) {
+            ruleDefinitionCorrected = ruleDefinitionCorrected.copy(body = ruleDefinitionCorrected.body.replace("_WHITESPACE", "UNDERSCORE_WHITESPACE"))
+        }
+        if (ruleDefinitionCorrected.body.contains("_QUOTED_CHAR")) {
+            ruleDefinitionCorrected = ruleDefinitionCorrected.copy(body = ruleDefinitionCorrected.body.replace("_QUOTED_CHAR", "UNDERSCORE_QUOTED_CHAR"))
+        }
+        if(ruleDefinitionCorrected.body.startsWith("'")
+            and ruleDefinitionCorrected.body.endsWith("'")
+            and ruleDefinition.body.subSequence(1, ruleDefinition.body.length -1).all {(it in 'a'..'z') or (it in 'A'..'Z') or (it == '_')}) {
+            ruleDefinitionCorrected = ruleDefinitionCorrected.copy(body = ruleDefinitionCorrected.body
+                .filter { it != '\'' }
+                .map { it -> if ((it in 'a'..'z') or (it in 'A'..'Z')) it.uppercase()  else "'$it'" }
+                .joinToString(" "))
+        }
+
+        if (ruleDefinitionCorrected.name == "BRACKET_QUOTED_IDENTIFIER") {
+            // This rule has JAVA code of escaping the identifier
+            ruleDefinitionCorrected = ruleDefinitionCorrected.copy(body = "'[' IDENTIFIER ']'")
+        }
+
         rulesByMode[mode]!!.add(ruleDefinitionCorrected)
     }
 
@@ -91,13 +129,44 @@ class LexerDefinitions(val name: String) {
         if (mode != DEFAULT_MODE_NAME) {
             printWriter.println("mode $mode;")
         }
+
         rulesByMode[mode]!!.forEach {
-            if (it.name.contains("COMMENT") && it.action == null) {
-                printWriter.println(it.copy(action = "skip").generate())
-            } else if (it.name.contains("COMMENT") && it.action != null && !it.action.contains("skip")) {
-                printWriter.println(it.copy(action = "skip, ${it.action}").generate())
+            // If a rule is already covered in default mode then we need to handle it like so:
+            /*
+            WS : [ \t]+;
+            RULE_WITH_ACTION: 'foo' -> skip
+            mode Mode1;
+                Mode1_WS : WS -> type(WS);
+                Mode1_RULE_WITH_ACTION: RULE_WITH_ACTION -> skip
+            mode Mode2;
+                Mode2_WS : WS -> type(WS);
+                Mode2_RULE_WITH_ACTION: RULE_WITH_ACTION -> skip
+             */
+            if (mode.contains("LUCENE")) {
+                // Special rules for the lucene rules
+                if ((mode != "LUCENE_DEFAULT") && (rulesByMode["LUCENE_DEFAULT"]!!.any{ ruleDefinition ->  ruleDefinition.name == it.name })) {
+                    var action = when {
+                        it.fragment -> null
+                        it.action != null -> it.action
+                        else -> "type(" + it.name + ")"
+                    }
+                    val ruleDefinition = RuleDefinition(mode + "_" + it.name, it.name, action)
+                    printWriter.println(ruleDefinition.generate())
+                } else {
+                    printWriter.println(it.generate())
+                }
             } else {
-                printWriter.println(it.generate())
+                if ((mode != DEFAULT_MODE_NAME) && (rulesByMode[DEFAULT_MODE_NAME]!!.any{ ruleDefinition ->  ruleDefinition.name == it.name })) {
+                    var action = when {
+                        it.fragment -> null
+                        it.action != null -> it.action
+                        else -> "type(" + it.name + ")"
+                    }
+                    val ruleDefinition = RuleDefinition(mode + "_" + it.name, it.name, action)
+                    printWriter.println(ruleDefinition.generate())
+                } else {
+                    printWriter.println(it.generate())
+                }
             }
         }
     }
